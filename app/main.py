@@ -28,6 +28,12 @@ fake_users_db = {
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
+    token_type: str
+
+
+class AccessToken(BaseModel):
+    access_token: str
     token_type: str
 
 
@@ -87,9 +93,40 @@ def create_access_token(data: dict, expires_delta: timedelta):
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "access": True})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def create_refresh_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(days=3)
+    to_encode.update({"exp": expire, 'refresh': True})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+async def get_current_user_refresh(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        refresh: str = payload.get("refresh")
+        if refresh is None or refresh is not True:
+            raise credentials_exception
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        token_data = TokenData(email=email)
+    except JWTError:
+        raise credentials_exception
+    user = get_user(fake_users_db, username=token_data.email)
+    if user is None:
+        raise credentials_exception
+    return user
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
@@ -100,6 +137,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        access: str = payload.get("access")
+        if access is None or access is not True:
+            raise credentials_exception
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -127,7 +167,8 @@ async def login_for_access_token(
     access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return Token(access_token=access_token, token_type="bearer")
+    refresh_token = create_refresh_token(data={"sub": user.email})
+    return Token(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
 
 
 @app.get("/users/me/", response_model=User)
@@ -136,5 +177,13 @@ async def read_users_me(
 ):
     return current_user
 
+
+@app.get("/refresh_token/", response_model=AccessToken)
+async def generate_token(current_user: User = Depends(get_current_user_refresh)):
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": current_user.email}, expires_delta=access_token_expires
+    )
+    return AccessToken(access_token=access_token, token_type="bearer")
 
 
