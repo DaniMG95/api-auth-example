@@ -178,7 +178,7 @@ async def read_users_me(
     return current_user
 
 
-@app.get("/refresh_token/", response_model=AccessToken)
+@app.post("/refresh_token/", response_model=AccessToken)
 async def generate_token(current_user: User = Depends(get_current_user_refresh)):
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
